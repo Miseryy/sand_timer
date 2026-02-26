@@ -200,6 +200,23 @@ impl App {
         if self.dropped_sand >= self.initial_sand && self.initial_sand > 0 { self.state = AppState::Finished; }
     }
 
+    fn flip(&mut self) {
+        // グリッドを上下反転
+        let mut new_grid = vec![vec![Cell::Empty; WIDTH as usize]; HEIGHT as usize];
+        for y in 0..HEIGHT as usize {
+            for x in 0..WIDTH as usize {
+                new_grid[y][x] = self.grid[HEIGHT as usize - 1 - y][x];
+            }
+        }
+        self.grid = new_grid;
+        // 上半分（これから落ちる側）の砂をinitial_sandとして再計算
+        let center_y = HEIGHT as usize / 2;
+        self.initial_sand = self.grid[center_y..].iter().flatten().filter(|&&c| c == Cell::Sand).count();
+        self.dropped_sand = 0;
+        self.flow_accumulator = Duration::ZERO;
+        self.state = AppState::Running;
+    }
+
     fn draw_physics(&self, ctx: &mut Context) {
         let mut sand_points = Vec::new();
         let mut wall_points = Vec::new();
@@ -262,9 +279,9 @@ async fn main() -> Result<()> {
                 ratatui::text::Line::from(format!(" Particles: {}/{} | Friction(W/S): {:.2}/{:.2}", app.dropped_sand, app.initial_sand, wall_f, sand_f)),
                 ratatui::text::Line::from(match app.state {
                     AppState::Setting => " [SETTING] Arrows: Adj, Num: Input, Space: Start ",
-                    AppState::Running => " [RUNNING] Space: Pause ",
-                    AppState::Paused => " [PAUSED] Space: Resume ",
-                    AppState::Finished => " [FINISHED] Press 'r' to Reset ",
+                    AppState::Running => " [RUNNING] Space: Pause  f: Flip ",
+                    AppState::Paused => " [PAUSED] Space: Resume  f: Flip ",
+                    AppState::Finished => " [FINISHED] f: Flip  r: Reset ",
                 }).style(Style::default().fg(Color::Yellow)),
             ];
 
@@ -277,6 +294,7 @@ async fn main() -> Result<()> {
                 match key.code {
                     KeyCode::Char('q') => break,
                     KeyCode::Char('r') => app = App::new(app.h, app.m, app.s, wall_f, sand_f),
+                    KeyCode::Char('f') if app.state != AppState::Setting => app.flip(),
                     KeyCode::Char(' ') => match app.state {
                         AppState::Setting | AppState::Paused => if app.initial_sand > 0 { app.state = AppState::Running },
                         AppState::Running => app.state = AppState::Paused,
