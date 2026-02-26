@@ -297,7 +297,9 @@ async fn main() -> Result<()> {
                                     2 => if app.s < 59 { app.s += 1 } else { app.m += 1; app.s = 0 },
                                     _ => {}
                                 }
+                                let sel = app.selected_unit;
                                 app = App::new(app.h, app.m, app.s, wall_f, sand_f);
+                                app.selected_unit = sel;
                             }
                             KeyCode::Down => {
                                 match app.selected_unit {
@@ -306,17 +308,21 @@ async fn main() -> Result<()> {
                                     2 => if app.s > 0 { app.s -= 1 } else if app.m > 0 { app.m -= 1; app.s = 59 },
                                     _ => {}
                                 }
+                                let sel = app.selected_unit;
                                 app = App::new(app.h, app.m, app.s, wall_f, sand_f);
+                                app.selected_unit = sel;
                             }
                             KeyCode::Char(c) if c.is_ascii_digit() => {
                                 let digit = c.to_digit(10).unwrap();
                                 match app.selected_unit {
                                     0 => app.h = (app.h * 10 + digit) % 100,
-                                    1 => app.m = (app.m * 10 + digit) % 60,
-                                    2 => app.s = (app.s * 10 + digit) % 60,
+                                    1 => { let v = app.m * 10 + digit; app.m = if v <= 59 { v } else { digit }; },
+                                    2 => { let v = app.s * 10 + digit; app.s = if v <= 59 { v } else { digit }; },
                                     _ => {}
                                 }
+                                let sel = app.selected_unit;
                                 app = App::new(app.h, app.m, app.s, wall_f, sand_f);
+                                app.selected_unit = sel;
                             }
                             _ => {}
                         }
