@@ -38,13 +38,11 @@ struct App {
     hole_radius: i32,
     last_tick: Instant,
     elapsed: Duration,
-    last_resume: Option<Instant>,
     h: u32, m: u32, s: u32,
     selected_unit: usize,
     state: AppState,
     wall_friction: f32,
     sand_friction: f32,
-    rotation: f32,
 }
 
 impl App {
@@ -55,29 +53,24 @@ impl App {
 
         let total_secs = (h * 3600 + m * 60 + s).max(1);
         
-        // ★砂を入れる範囲を変数化（これでいつでも自由に砂の量を調整できます）
         let sand_start_y = center_y + 1;
         let sand_end_y = HEIGHT - 15;
 
-        // ★動的計算: 実際に砂が配置される予定のマス数を事前にカウントする
         let mut estimated_sand = 0.0;
         for y in sand_start_y..sand_end_y {
             let dy = (y - center_y).abs();
             for x in 2..(WIDTH - 2) {
                 let dx = (x - center_x).abs();
-                // 穴の幅が0だった場合の、すり鉢の内側（砂が入るスペース）をカウント
                 if dx as f32 <= (dy as f32 / 1.1) {
                     estimated_sand += 1.0;
                 }
             }
         }
 
-        // 動的に計算した砂の量から、必要な穴の幅を割り出す
         let estimated_gps = estimated_sand / total_secs as f64;
         let required_width = (estimated_gps / 30.0).ceil() as i32;
         let hole_radius = (required_width / 2).max(0);
 
-        // 壁の生成
         for y in 0..HEIGHT {
             for x in 0..WIDTH {
                 let dx = (x - center_x).abs();
@@ -96,7 +89,6 @@ impl App {
             }
         }
 
-        // 砂の生成（変数を使って配置）
         let mut count = 0;
         for y in sand_start_y..sand_end_y {
             for d in 0..WIDTH/2 {
@@ -111,23 +103,21 @@ impl App {
             }
         }
 
-        // 実際の砂の数から、正確な1秒あたりの落下数を計算
         let grains_per_sec = count as f64 / total_secs as f64;
-        let physics_interval = Duration::from_millis(16); // ★60FPS固定でOK！
+        let physics_interval = Duration::from_millis(16);
 
         Self {
             grid, initial_sand: count,
             physics_accumulator: Duration::ZERO, physics_interval,
             gate_allowance: 0.0, grains_per_sec, hole_radius,
             last_tick: Instant::now(),
-            elapsed: Duration::ZERO, last_resume: None,
+            elapsed: Duration::ZERO,
             h, m, s, selected_unit: 2, state: AppState::Setting,
-            wall_friction: wall_f, sand_friction: sand_f, rotation: 0.0,
+            wall_friction: wall_f, sand_friction: sand_f,
         }
     }
 
     fn update(&mut self) {
-        // Setting(設定中) と Paused(一時停止中) の時だけ完全に時間を止める
         if self.state == AppState::Setting || self.state == AppState::Paused {
             self.last_tick = Instant::now();
             return;
@@ -138,27 +128,21 @@ impl App {
         self.last_tick = now;
         self.physics_accumulator += delta;
 
-        // タイマー実行中(Running)の時だけ時間を進め、ゲート通過許可を増やす
         if self.state == AppState::Running {
             self.elapsed += delta;
             self.gate_allowance += self.grains_per_sec * delta.as_secs_f64();
         }
 
-        // ★サブステップの重いループを廃止！1フレームにつき1回だけ物理演算を回す
         if self.physics_accumulator >= self.physics_interval {
             self.physics_accumulator -= self.physics_interval;
             self.step_physics();
 
-            // ラグで時間が溜まりすぎた場合は切り捨てる
             if self.physics_accumulator > Duration::from_millis(50) {
                 self.physics_accumulator = Duration::ZERO;
             }
         }
     }
 
-
-
-    // 物理演算の本体（元の update の後半部分）
     fn step_physics(&mut self) {
         let mut rng = rand::rng();
         let mut next_grid = vec![vec![Cell::Empty; WIDTH as usize]; HEIGHT as usize];
@@ -168,62 +152,38 @@ impl App {
             }
         }
 
-        let rad = self.rotation.to_radians();
-        let gx_f = rad.sin();
-        let gy_f = -rad.cos();
-        let prim_dy = gy_f.round() as i32;
-        let prim_dx = gx_f.round() as i32;
-        let (prim_dy, prim_dx) = if prim_dy == 0 && prim_dx == 0 {
-            (gy_f.signum() as i32, 0)
-        } else { (prim_dy, prim_dx) };
-
-        let (slide_a, slide_b) = if prim_dx == 0 {
-            ((1i32, prim_dy), (-1i32, prim_dy))
-        } else if prim_dy == 0 {
-            ((prim_dx, 1i32), (prim_dx, -1i32))
-        } else {
-            ((prim_dx, 0i32), (0i32, prim_dy))
-        };
+        let prim_dy = -1i32;
+        let prim_dx = 0i32;
+        let slide_a = (1i32, -1i32);
+        let slide_b = (-1i32, -1i32);
 
         let center_x = (WIDTH / 2) as usize;
         let center_y = (HEIGHT / 2) as usize;
 
-        // Step 1: 重力方向に応じて走査順序を変更
-        let y_rev = prim_dy > 0;
         let x_rev = rng.random_bool(0.5);
 
-        for i in 0..HEIGHT as usize {
-            let y = if y_rev { HEIGHT as usize - 1 - i } else { i };
+        for y in 0..HEIGHT as usize {
             for j in 0..WIDTH as usize {
                 let x = if x_rev { WIDTH as usize - 1 - j } else { j };
 
                 if self.grid[y][x] == Cell::Sand {
                     let mut moved = false;
-
                     let ny = y as i32 + prim_dy;
                     let nx = x as i32 + prim_dx;
-                    let in_bounds = ny >= 0 && ny < HEIGHT as i32 && nx >= 0 && nx < WIDTH as i32;
 
-                    if in_bounds {
+                    if ny >= 0 && ny < HEIGHT as i32 && nx >= 0 && nx < WIDTH as i32 {
                         let ny = ny as usize;
                         let nx = nx as usize;
                         let is_at_gate = (x as i32 - center_x as i32).abs() <= self.hole_radius && y == center_y;
-                        // 終了後(Finished)はゲート制限を解除して残りの砂をすべて通す
                         let allowed = !is_at_gate || self.gate_allowance >= 1.0 || self.state == AppState::Finished;
 
                         if allowed && next_grid[ny][nx] == Cell::Empty {
                             next_grid[ny][nx] = Cell::Sand;
                             moved = true;
-                            // 実行中のみゲートの通過枠を消費する
                             if is_at_gate && self.state == AppState::Running { self.gate_allowance -= 1.0; }
                         } else if !is_at_gate {
-                            let slides = if rng.random_bool(0.5) {
-                                [slide_a, slide_b]
-                            } else {[slide_b, slide_a]
-                            };
-
-                            let is_in_source = (x as i32 - center_x as i32) * prim_dx
-                                + (y as i32 - center_y as i32) * prim_dy < 0;
+                            let slides = if rng.random_bool(0.5) { [slide_a, slide_b] } else { [slide_b, slide_a] };
+                            let is_in_source = y > center_y;
                             let adj_to_wall =
                                 (x > 0 && self.grid[y][x-1] == Cell::Wall)
                                 || (x+1 < WIDTH as usize && self.grid[y][x+1] == Cell::Wall)
@@ -253,8 +213,7 @@ impl App {
                         if next_grid[y][x] == Cell::Empty {
                             next_grid[y][x] = Cell::Sand;
                         } else {
-                            let is_in_source = (x as i32 - center_x as i32) * prim_dx
-                                + (y as i32 - center_y as i32) * prim_dy < 0;
+                            let is_in_source = y > center_y;
                             let vibrate_chance = if is_in_source { 0.2 } else { 0.05 };
                             if rng.random_bool(vibrate_chance) {
                                 let dxs = if rng.random_bool(0.5) { [1i32, -1] } else {[-1, 1] };
@@ -288,38 +247,17 @@ impl App {
         }
 
         self.grid = next_grid;
-        // 実行中の場合のみ、上の砂が0になったら終了状態にする
         if self.state == AppState::Running && self.initial_sand > 0 && self.source_sand() == 0 { 
             self.state = AppState::Finished; 
         }
     }
 
-    /// 重力方向に対して「上側（ソース側）」にある砂粒を数える
     fn source_sand(&self) -> usize {
-        let cx = (WIDTH as f64) / 2.0;
-        let cy = (HEIGHT as f64) / 2.0;
-        let rad = self.rotation.to_radians();
-        let gx = rad.sin() as f64;
-        let gy = -(rad.cos()) as f64;
-        self.grid.iter().enumerate().flat_map(|(y, row)| {
-            row.iter().enumerate().map(move |(x, &cell)| (x, y, cell))
-        })
-        .filter(|&(x, y, cell)| {
-            cell == Cell::Sand && {
-                // 重力と逆方向(上側)にあるかどうか
-                let dx = x as f64 - cx;
-                let dy = y as f64 - cy;
-                dx * gx + dy * gy < 0.0
-            }
-        })
-        .count()
-    }
-
-    fn rotate_by(&mut self, degrees: f32) {
-        self.rotation = (self.rotation + degrees).rem_euclid(360.0);
-        self.initial_sand = self.grid.iter().flatten().filter(|&&c| c == Cell::Sand).count();
-        self.physics_accumulator = Duration::ZERO; // ← ここを修正
-        if self.state == AppState::Finished { self.state = AppState::Running; }
+        let center_y = HEIGHT / 2;
+        self.grid.iter().enumerate().take(HEIGHT as usize).skip(center_y as usize + 1)
+            .flat_map(|(_, row)| row.iter())
+            .filter(|&&cell| cell == Cell::Sand)
+            .count()
     }
 
     fn draw_physics(&self, ctx: &mut Context) {
@@ -340,9 +278,7 @@ impl App {
 }
 
 fn config_path() -> PathBuf {
-    let mut p = std::env::var("HOME")
-        .map(PathBuf::from)
-        .unwrap_or_else(|_| PathBuf::from("."));
+    let mut p = std::env::var("HOME").map(PathBuf::from).unwrap_or_else(|_| PathBuf::from("."));
     p.push(".sand_timer.conf");
     p
 }
@@ -408,14 +344,13 @@ async fn main() -> Result<()> {
             let fallen_count = app.initial_sand.saturating_sub(app.source_sand());
             let timer_display = vec![
                 ratatui::text::Line::from(timer_spans),
-                ratatui::text::Line::from(format!(" Particles: {}/{} | Friction(W/S): {:.2}/{:.2} | Angle: {:.0}° | Rate: {:.1}/s",
-                fallen_count, app.initial_sand, wall_f, sand_f, app.rotation, 
-                app.grains_per_sec)),
+                ratatui::text::Line::from(format!(" Particles: {}/{} | Friction(W/S): {:.2}/{:.2} | Rate: {:.1}/s",
+                fallen_count, app.initial_sand, wall_f, sand_f, app.grains_per_sec)),
                 ratatui::text::Line::from(match app.state {
                     AppState::Setting => " [SETTING] Arrows: Adj, Num: Input, Space: Start ",
-                    AppState::Running => " [RUNNING] Space: Pause  w/e: Rotate±5°  f: Flip ",
-                    AppState::Paused  => " [PAUSED] Space: Resume  w/e: Rotate±5°  f: Flip ",
-                    AppState::Finished => " [FINISHED] w/e: Rotate±5°  f: Flip  r: Reset ",
+                    AppState::Running => " [RUNNING] Space: Pause ",
+                    AppState::Paused  => " [PAUSED] Space: Resume ",
+                    AppState::Finished => " [FINISHED] r: Reset ",
                 }).style(Style::default().fg(Color::Yellow)),
             ];
 
@@ -428,9 +363,6 @@ async fn main() -> Result<()> {
                 match key.code {
                     KeyCode::Char('q') => { save_config(app.h, app.m, app.s, wall_f, sand_f); break; },
                     KeyCode::Char('r') => app = App::new(app.h, app.m, app.s, wall_f, sand_f),
-                    KeyCode::Char('f') if app.state != AppState::Setting => app.rotate_by(180.0),
-                    KeyCode::Char('e') if app.state != AppState::Setting => app.rotate_by(5.0),
-                    KeyCode::Char('w') if app.state != AppState::Setting => app.rotate_by(-5.0),
                     KeyCode::Char(' ') => match app.state {
                         AppState::Setting | AppState::Paused => if app.initial_sand > 0 {
                             app.state = AppState::Running;
