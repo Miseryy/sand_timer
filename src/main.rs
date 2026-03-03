@@ -344,32 +344,48 @@ impl App {
     }
 }
 
+use serde::{Deserialize, Serialize};
+
+// 新しい設定構造体
+#[derive(Serialize, Deserialize, Debug, Default)]
+struct Config {
+    hour: u32,
+    minute: u32,
+    second: u32,
+    wall_friction: f32,
+    sand_friction: f32,
+    is_24h_format: bool,
+}
+
 fn config_path() -> PathBuf {
     let mut p = std::env::var("HOME")
         .map(PathBuf::from)
         .unwrap_or_else(|_| PathBuf::from("."));
-    p.push(".sand_timer.conf");
+    p.push(".sand_timer.toml"); // TOML形式に変更
     p
 }
 
-fn save_config(h: u32, m: u32, s: u32, wall_f: f32, sand_f: f32, is_24h: bool) {
-    let content = format!("{}\n{}\n{}\n{}\n{}\n{}\n", h, m, s, wall_f, sand_f, is_24h);
-    let _ = fs::write(config_path(), content);
+fn save_config(h: u32, m: u32, s: u32, wall_f: f32, sand_f: f32, is_24h: bool) -> Result<()> {
+    let config = Config {
+        hour: h,
+        minute: m,
+        second: s,
+        wall_friction: wall_f,
+        sand_friction: sand_f,
+        is_24h_format: is_24h,
+    };
+    let toml_string = toml::to_string(&config)?;
+    fs::write(config_path(), toml_string)?;
+    Ok(())
 }
 
-fn load_config() -> (u32, u32, u32, f32, f32, bool) {
-    let default = (0, 0, 30, 0.1f32, 0.02f32, true);
-    let Ok(content) = fs::read_to_string(config_path()) else {
-        return default;
-    };
-    let mut lines = content.lines();
-    let h = lines.next().and_then(|l| l.parse().ok()).unwrap_or(0);
-    let m = lines.next().and_then(|l| l.parse().ok()).unwrap_or(0);
-    let s = lines.next().and_then(|l| l.parse().ok()).unwrap_or(30);
-    let wf = lines.next().and_then(|l| l.parse().ok()).unwrap_or(0.1);
-    let sf = lines.next().and_then(|l| l.parse().ok()).unwrap_or(0.02);
-    let is_24h = lines.next().and_then(|l| l.parse().ok()).unwrap_or(true);
-    (h, m, s, wf, sf, is_24h)
+fn load_config() -> Config {
+    let config_path = config_path();
+    if !config_path.exists() {
+        return Config::default();
+    }
+    let content = fs::read_to_string(config_path).unwrap_or_default();
+    toml::from_str(&content).unwrap_or_else(|_| Config::default())
 }
 
 #[tokio::main]
@@ -380,10 +396,17 @@ async fn main() -> Result<()> {
     let backend = CrosstermBackend::new(stdout);
     let mut terminal = Terminal::new(backend)?;
 
-    let (init_h, init_m, init_s, init_wf, init_sf, init_24h) = load_config();
-    let mut wall_f = init_wf;
-    let mut sand_f = init_sf;
-    let mut app = App::new(init_h, init_m, init_s, wall_f, sand_f, init_24h);
+    let loaded_config = load_config();
+    let mut wall_f = loaded_config.wall_friction;
+    let mut sand_f = loaded_config.sand_friction;
+    let mut app = App::new(
+        loaded_config.hour,
+        loaded_config.minute,
+        loaded_config.second,
+        wall_f,
+        sand_f,
+        loaded_config.is_24h_format,
+    );
     let tick_rate = Duration::from_millis(16);
 
     loop {
@@ -543,7 +566,7 @@ async fn main() -> Result<()> {
             if let Event::Key(key) = event::read()? {
                 match key.code {
                     KeyCode::Char('q') => {
-                        save_config(app.h, app.m, app.s, wall_f, sand_f, app.is_24h);
+                        save_config(app.h, app.m, app.s, wall_f, sand_f, app.is_24h)?;
                         break;
                     }
                     KeyCode::Char('r') => {
@@ -551,7 +574,7 @@ async fn main() -> Result<()> {
                     }
                     KeyCode::Char('t') => {
                         app.is_24h = !app.is_24h;
-                        save_config(app.h, app.m, app.s, wall_f, sand_f, app.is_24h);
+                        save_config(app.h, app.m, app.s, wall_f, sand_f, app.is_24h)?;
                     }
                     KeyCode::Char(' ') => match app.state {
                         AppState::Setting | AppState::Paused => {
@@ -566,22 +589,22 @@ async fn main() -> Result<()> {
                     KeyCode::Char(']') => {
                         wall_f = (wall_f + 0.05).min(1.0);
                         app.wall_friction = wall_f;
-                        save_config(app.h, app.m, app.s, wall_f, sand_f, app.is_24h);
+                        save_config(app.h, app.m, app.s, wall_f, sand_f, app.is_24h)?;
                     }
                     KeyCode::Char('[') => {
                         wall_f = (wall_f - 0.05).max(0.0);
                         app.wall_friction = wall_f;
-                        save_config(app.h, app.m, app.s, wall_f, sand_f, app.is_24h);
+                        save_config(app.h, app.m, app.s, wall_f, sand_f, app.is_24h)?;
                     }
                     KeyCode::Char('}') => {
                         sand_f = (sand_f + 0.05).min(1.0);
                         app.sand_friction = sand_f;
-                        save_config(app.h, app.m, app.s, wall_f, sand_f, app.is_24h);
+                        save_config(app.h, app.m, app.s, wall_f, sand_f, app.is_24h)?;
                     }
                     KeyCode::Char('{') => {
                         sand_f = (sand_f - 0.05).max(0.0);
                         app.sand_friction = sand_f;
-                        save_config(app.h, app.m, app.s, wall_f, sand_f, app.is_24h);
+                        save_config(app.h, app.m, app.s, wall_f, sand_f, app.is_24h)?;
                     }
                     _ if app.state == AppState::Setting => match key.code {
                         KeyCode::Left => app.selected_unit = (app.selected_unit + 2) % 3,
@@ -610,7 +633,7 @@ async fn main() -> Result<()> {
                             let sel = app.selected_unit;
                             app = App::new(app.h, app.m, app.s, wall_f, sand_f, app.is_24h);
                             app.selected_unit = sel;
-                            save_config(app.h, app.m, app.s, wall_f, sand_f, app.is_24h);
+                            save_config(app.h, app.m, app.s, wall_f, sand_f, app.is_24h)?;
                         }
                         KeyCode::Down => {
                             match app.selected_unit {
@@ -640,7 +663,7 @@ async fn main() -> Result<()> {
                             let sel = app.selected_unit;
                             app = App::new(app.h, app.m, app.s, wall_f, sand_f, app.is_24h);
                             app.selected_unit = sel;
-                            save_config(app.h, app.m, app.s, wall_f, sand_f, app.is_24h);
+                            save_config(app.h, app.m, app.s, wall_f, sand_f, app.is_24h)?;
                         }
                         KeyCode::Char(c) if c.is_ascii_digit() => {
                             let digit = c.to_digit(10).unwrap();
@@ -659,7 +682,7 @@ async fn main() -> Result<()> {
                             let sel = app.selected_unit;
                             app = App::new(app.h, app.m, app.s, wall_f, sand_f, app.is_24h);
                             app.selected_unit = sel;
-                            save_config(app.h, app.m, app.s, wall_f, sand_f, app.is_24h);
+                            save_config(app.h, app.m, app.s, wall_f, sand_f, app.is_24h)?;
                         }
                         _ => {}
                     },

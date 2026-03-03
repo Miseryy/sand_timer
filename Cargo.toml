@@ -9,4 +9,6 @@ chrono = "0.4.44"
 crossterm = "0.29.0"
 rand = "0.10.0"
 ratatui = "0.30.0"
+serde = { version = "1.0.228", features = ["derive"] }
 tokio = { version = "1.49.0", features = ["full"] }
+toml = { version = "1.0.3", features = ["serde"] }
