@@ -5,38 +5,29 @@ use crossterm::{
     execute,
     terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen},
 };
-use rand::RngExt;
+use rand::{Rng, RngExt};
 use ratatui::{
     backend::CrosstermBackend,
-    layout::{Alignment, Constraint, Direction, Layout},
+    layout::{Alignment, Constraint, Direction, Layout, Rect},
     style::{Color, Modifier, Style},
     widgets::{
         canvas::{Canvas, Context, Points},
-        Block, Borders, Paragraph,
+        Block, Borders, Paragraph, Clear,
     },
     Terminal,
 };
+use std::time::{Duration, Instant};
 use std::fs;
 use std::path::PathBuf;
-use std::time::{Duration, Instant};
 
 const WIDTH: i32 = 100;
 const HEIGHT: i32 = 160;
 
 #[derive(Clone, Copy, PartialEq)]
-enum Cell {
-    Empty,
-    Sand,
-    Wall,
-}
+enum Cell { Empty, Sand, Wall }
 
 #[derive(PartialEq)]
-enum AppState {
-    Setting,
-    Running,
-    Paused,
-    Finished,
-}
+enum AppState { Setting, Running, Paused, Finished }
 
 struct App {
     grid: Vec<Vec<Cell>>,
@@ -48,9 +39,7 @@ struct App {
     hole_radius: i32,
     last_tick: Instant,
     elapsed: Duration,
-    h: u32,
-    m: u32,
-    s: u32,
+    h: u32, m: u32, s: u32,
     selected_unit: usize,
     state: AppState,
     wall_friction: f32,
@@ -65,7 +54,7 @@ impl App {
         let center_y = HEIGHT / 2;
 
         let total_secs = (h * 3600 + m * 60 + s).max(1);
-
+        
         let sand_start_y = center_y + 1;
         let sand_end_y = HEIGHT - 15;
 
@@ -93,9 +82,7 @@ impl App {
                     continue;
                 }
                 if dy == 0 {
-                    if dx > hole_radius {
-                        grid[y as usize][x as usize] = Cell::Wall;
-                    }
+                    if dx > hole_radius { grid[y as usize][x as usize] = Cell::Wall; }
                 } else {
                     if dx as f32 > (dy as f32 / 1.1) + hole_radius as f32 {
                         grid[y as usize][x as usize] = Cell::Wall;
@@ -106,16 +93,14 @@ impl App {
 
         let mut count = 0;
         for y in sand_start_y..sand_end_y {
-            for d in 0..WIDTH / 2 {
-                for sign in [-1, 1] {
+            for d in 0..WIDTH/2 {
+                for sign in[-1, 1] {
                     let x = center_x + (d * sign);
                     if x >= 0 && x < WIDTH && grid[y as usize][x as usize] == Cell::Empty {
                         grid[y as usize][x as usize] = Cell::Sand;
                         count += 1;
                     }
-                    if d == 0 {
-                        break;
-                    }
+                    if d == 0 { break; }
                 }
             }
         }
@@ -124,22 +109,13 @@ impl App {
         let physics_interval = Duration::from_millis(16);
 
         Self {
-            grid,
-            initial_sand: count,
-            physics_accumulator: Duration::ZERO,
-            physics_interval,
-            gate_allowance: 0.0,
-            grains_per_sec,
-            hole_radius,
+            grid, initial_sand: count,
+            physics_accumulator: Duration::ZERO, physics_interval,
+            gate_allowance: 0.0, grains_per_sec, hole_radius,
             last_tick: Instant::now(),
             elapsed: Duration::ZERO,
-            h,
-            m,
-            s,
-            selected_unit: 2,
-            state: AppState::Setting,
-            wall_friction: wall_f,
-            sand_friction: sand_f,
+            h, m, s, selected_unit: 2, state: AppState::Setting,
+            wall_friction: wall_f, sand_friction: sand_f,
             is_24h,
         }
     }
@@ -175,9 +151,7 @@ impl App {
         let mut next_grid = vec![vec![Cell::Empty; WIDTH as usize]; HEIGHT as usize];
         for y in 0..HEIGHT as usize {
             for x in 0..WIDTH as usize {
-                if self.grid[y][x] == Cell::Wall {
-                    next_grid[y][x] = Cell::Wall;
-                }
+                if self.grid[y][x] == Cell::Wall { next_grid[y][x] = Cell::Wall; }
             }
         }
 
@@ -203,46 +177,29 @@ impl App {
                     if ny >= 0 && ny < HEIGHT as i32 && nx >= 0 && nx < WIDTH as i32 {
                         let ny = ny as usize;
                         let nx = nx as usize;
-                        let is_at_gate =
-                            (x as i32 - center_x as i32).abs() <= self.hole_radius && y == center_y;
-                        let allowed = !is_at_gate
-                            || self.gate_allowance >= 1.0
-                            || self.state == AppState::Finished;
+                        let is_at_gate = (x as i32 - center_x as i32).abs() <= self.hole_radius && y == center_y;
+                        let allowed = !is_at_gate || self.gate_allowance >= 1.0 || self.state == AppState::Finished;
 
                         if allowed && next_grid[ny][nx] == Cell::Empty {
                             next_grid[ny][nx] = Cell::Sand;
                             moved = true;
-                            if is_at_gate && self.state == AppState::Running {
-                                self.gate_allowance -= 1.0;
-                            }
+                            if is_at_gate && self.state == AppState::Running { self.gate_allowance -= 1.0; }
                         } else if !is_at_gate {
-                            let slides = if rng.random_bool(0.5) {
-                                [slide_a, slide_b]
-                            } else {
-                                [slide_b, slide_a]
-                            };
+                            let slides = if rng.random_bool(0.5) { [slide_a, slide_b] } else { [slide_b, slide_a] };
                             let is_in_source = y > center_y;
-                            let adj_to_wall = (x > 0 && self.grid[y][x - 1] == Cell::Wall)
-                                || (x + 1 < WIDTH as usize && self.grid[y][x + 1] == Cell::Wall)
-                                || (y > 0 && self.grid[y - 1][x] == Cell::Wall)
-                                || (y + 1 < HEIGHT as usize && self.grid[y + 1][x] == Cell::Wall);
-                            let base_friction = if is_in_source {
-                                self.sand_friction * 0.5
-                            } else {
-                                self.sand_friction
-                            };
-                            let friction = if adj_to_wall {
-                                self.wall_friction
-                            } else {
-                                base_friction
-                            };
+                            let adj_to_wall =
+                                (x > 0 && self.grid[y][x-1] == Cell::Wall)
+                                || (x+1 < WIDTH as usize && self.grid[y][x+1] == Cell::Wall)
+                                || (y > 0 && self.grid[y-1][x] == Cell::Wall)
+                                || (y+1 < HEIGHT as usize && self.grid[y+1][x] == Cell::Wall);
+                            let base_friction = if is_in_source { self.sand_friction * 0.5 } else { self.sand_friction };
+                            let friction = if adj_to_wall { self.wall_friction } else { base_friction };
 
                             if !rng.random_bool(friction as f64) {
                                 for &(sdx, sdy) in &slides {
                                     let sy = y as i32 + sdy;
                                     let sx = x as i32 + sdx;
-                                    if sy >= 0 && sy < HEIGHT as i32 && sx >= 0 && sx < WIDTH as i32
-                                    {
+                                    if sy >= 0 && sy < HEIGHT as i32 && sx >= 0 && sx < WIDTH as i32 {
                                         let (sy, sx) = (sy as usize, sx as usize);
                                         if next_grid[sy][sx] == Cell::Empty {
                                             next_grid[sy][sx] = Cell::Sand;
@@ -262,17 +219,10 @@ impl App {
                             let is_in_source = y > center_y;
                             let vibrate_chance = if is_in_source { 0.2 } else { 0.05 };
                             if rng.random_bool(vibrate_chance) {
-                                let dxs = if rng.random_bool(0.5) {
-                                    [1i32, -1]
-                                } else {
-                                    [-1, 1]
-                                };
+                                let dxs = if rng.random_bool(0.5) { [1i32, -1] } else {[-1, 1] };
                                 for &dx in dxs.iter() {
                                     let nx = x as i32 + dx;
-                                    if nx >= 0
-                                        && nx < WIDTH as i32
-                                        && next_grid[y][nx as usize] == Cell::Empty
-                                    {
+                                    if nx >= 0 && nx < WIDTH as i32 && next_grid[y][nx as usize] == Cell::Empty {
                                         next_grid[y][nx as usize] = Cell::Sand;
                                         moved = true;
                                         break;
@@ -284,11 +234,7 @@ impl App {
                                     for dx in -1i32..=1 {
                                         let ny = y as i32 + dy;
                                         let nx = x as i32 + dx;
-                                        if ny >= 0
-                                            && ny < HEIGHT as i32
-                                            && nx >= 0
-                                            && nx < WIDTH as i32
-                                        {
+                                        if ny >= 0 && ny < HEIGHT as i32 && nx >= 0 && nx < WIDTH as i32 {
                                             if next_grid[ny as usize][nx as usize] == Cell::Empty {
                                                 next_grid[ny as usize][nx as usize] = Cell::Sand;
                                                 break 'save;
@@ -304,18 +250,18 @@ impl App {
         }
 
         self.grid = next_grid;
-        if self.state == AppState::Running && self.initial_sand > 0 && self.source_sand() == 0 {
-            self.state = AppState::Finished;
+        if self.state == AppState::Running && self.initial_sand > 0 && self.source_sand() == 0 { 
+            self.state = AppState::Finished; 
+            let _ = std::process::Command::new("notify-send")
+                .arg("Sand Timer")
+                .arg("Time Up!")
+                .spawn();
         }
     }
 
     fn source_sand(&self) -> usize {
         let center_y = HEIGHT / 2;
-        self.grid
-            .iter()
-            .enumerate()
-            .take(HEIGHT as usize)
-            .skip(center_y as usize + 1)
+        self.grid.iter().enumerate().take(HEIGHT as usize).skip(center_y as usize + 1)
             .flat_map(|(_, row)| row.iter())
             .filter(|&&cell| cell == Cell::Sand)
             .count()
@@ -333,59 +279,53 @@ impl App {
                 }
             }
         }
-        ctx.draw(&Points {
-            coords: &wall_points,
-            color: Color::Rgb(80, 80, 80),
-        });
-        ctx.draw(&Points {
-            coords: &sand_points,
-            color: Color::Yellow,
-        });
+        ctx.draw(&Points { coords: &wall_points, color: Color::Rgb(80, 80, 80) });
+        ctx.draw(&Points { coords: &sand_points, color: Color::Yellow });
     }
-}
-
-use serde::{Deserialize, Serialize};
-
-// 新しい設定構造体
-#[derive(Serialize, Deserialize, Debug, Default)]
-struct Config {
-    hour: u32,
-    minute: u32,
-    second: u32,
-    wall_friction: f32,
-    sand_friction: f32,
-    is_24h_format: bool,
 }
 
 fn config_path() -> PathBuf {
-    let mut p = std::env::var("HOME")
-        .map(PathBuf::from)
-        .unwrap_or_else(|_| PathBuf::from("."));
-    p.push(".sand_timer.toml"); // TOML形式に変更
+    let mut p = std::env::var("HOME").map(PathBuf::from).unwrap_or_else(|_| PathBuf::from("."));
+    p.push(".sand_timer.conf");
     p
 }
 
-fn save_config(h: u32, m: u32, s: u32, wall_f: f32, sand_f: f32, is_24h: bool) -> Result<()> {
-    let config = Config {
-        hour: h,
-        minute: m,
-        second: s,
-        wall_friction: wall_f,
-        sand_friction: sand_f,
-        is_24h_format: is_24h,
-    };
-    let toml_string = toml::to_string(&config)?;
-    fs::write(config_path(), toml_string)?;
-    Ok(())
+fn save_config(h: u32, m: u32, s: u32, wall_f: f32, sand_f: f32, is_24h: bool) {
+    let content = format!("{}\n{}\n{}\n{}\n{}\n{}\n", h, m, s, wall_f, sand_f, if is_24h { 1 } else { 0 });
+    let _ = fs::write(config_path(), content);
 }
 
-fn load_config() -> Config {
-    let config_path = config_path();
-    if !config_path.exists() {
-        return Config::default();
-    }
-    let content = fs::read_to_string(config_path).unwrap_or_default();
-    toml::from_str(&content).unwrap_or_else(|_| Config::default())
+fn load_config() -> (u32, u32, u32, f32, f32, bool) {
+    let default = (0, 0, 30, 0.1f32, 0.02f32, true);
+    let Ok(content) = fs::read_to_string(config_path()) else { return default; };
+    let mut lines = content.lines();
+    let h    = lines.next().and_then(|l| l.parse().ok()).unwrap_or(0);
+    let m    = lines.next().and_then(|l| l.parse().ok()).unwrap_or(0);
+    let s    = lines.next().and_then(|l| l.parse().ok()).unwrap_or(30);
+    let wf   = lines.next().and_then(|l| l.parse().ok()).unwrap_or(0.1);
+    let sf   = lines.next().and_then(|l| l.parse().ok()).unwrap_or(0.02);
+    let i24  = lines.next().map(|l| l == "1").unwrap_or(true);
+    (h, m, s, wf, sf, i24)
+}
+
+fn centered_rect(percent_x: u16, percent_y: u16, r: Rect) -> Rect {
+    let popup_layout = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([
+            Constraint::Percentage((100 - percent_y) / 2),
+            Constraint::Percentage(percent_y),
+            Constraint::Percentage((100 - percent_y) / 2),
+        ])
+        .split(r);
+
+    Layout::default()
+        .direction(Direction::Horizontal)
+        .constraints([
+            Constraint::Percentage((100 - percent_x) / 2),
+            Constraint::Percentage(percent_x),
+            Constraint::Percentage((100 - percent_x) / 2),
+        ])
+        .split(popup_layout[1])[1]
 }
 
 #[tokio::main]
@@ -396,71 +336,31 @@ async fn main() -> Result<()> {
     let backend = CrosstermBackend::new(stdout);
     let mut terminal = Terminal::new(backend)?;
 
-    let loaded_config = load_config();
-    let mut wall_f = loaded_config.wall_friction;
-    let mut sand_f = loaded_config.sand_friction;
-    let mut app = App::new(
-        loaded_config.hour,
-        loaded_config.minute,
-        loaded_config.second,
-        wall_f,
-        sand_f,
-        loaded_config.is_24h_format,
-    );
+    let (init_h, init_m, init_s, init_wf, init_sf, init_i24) = load_config();
+    let mut wall_f = init_wf;
+    let mut sand_f = init_sf;
+    let mut app = App::new(init_h, init_m, init_s, wall_f, sand_f, init_i24);
     let tick_rate = Duration::from_millis(16);
 
     loop {
         terminal.draw(|f| {
-            let chunks = Layout::default()
-                .direction(Direction::Vertical)
-                .constraints([Constraint::Min(0), Constraint::Length(7)])
-                .split(f.area());
-
-            let top_split = Layout::default()
-                .direction(Direction::Horizontal)
-                .constraints([Constraint::Percentage(50), Constraint::Percentage(50)])
-                .split(chunks[0]);
+            let chunks = Layout::default().direction(Direction::Vertical).constraints([Constraint::Min(0), Constraint::Length(7)]).split(f.area());
+            
+            let top_split = Layout::default().direction(Direction::Horizontal).constraints([Constraint::Percentage(50), Constraint::Percentage(50)]).split(chunks[0]);
 
             // Left: Sand Timer
             let ui_width = (WIDTH / 2) as u16 + 2;
             let ui_height = (HEIGHT / 4) as u16 + 2;
-            let left_v_margin = Layout::default()
-                .direction(Direction::Vertical)
-                .constraints([
-                    Constraint::Fill(1),
-                    Constraint::Length(ui_height),
-                    Constraint::Fill(1),
-                ])
-                .split(top_split[0]);
-            let center_area = Layout::default()
-                .direction(Direction::Horizontal)
-                .constraints([
-                    Constraint::Fill(1),
-                    Constraint::Length(ui_width),
-                    Constraint::Fill(1),
-                ])
-                .split(left_v_margin[1])[1];
+            let left_v_margin = Layout::default().direction(Direction::Vertical).constraints([Constraint::Fill(1), Constraint::Length(ui_height), Constraint::Fill(1)]).split(top_split[0]);
+            let center_area = Layout::default().direction(Direction::Horizontal).constraints([Constraint::Fill(1), Constraint::Length(ui_width), Constraint::Fill(1)]).split(left_v_margin[1])[1];
 
-            let canvas = Canvas::default()
-                .block(
-                    Block::default()
-                        .borders(Borders::ALL)
-                        .title(" Reliable Sand Timer "),
-                )
-                .x_bounds([0.0, WIDTH as f64])
-                .y_bounds([0.0, HEIGHT as f64])
-                .paint(|ctx| app.draw_physics(ctx));
+            let canvas = Canvas::default().block(Block::default().borders(Borders::ALL).title(" Reliable Sand Timer ")).x_bounds([0.0, WIDTH as f64]).y_bounds([0.0, HEIGHT as f64]).paint(|ctx| app.draw_physics(ctx));
             f.render_widget(canvas, center_area);
 
-            // Right: Digital Clock
+            // Right: Digital Clock (Current Time)
             let now = Local::now();
-            let clock_str = if app.is_24h {
-                now.format("%H:%M:%S").to_string()
-            } else {
-                now.format("%I:%M:%S %p").to_string()
-            };
+            let clock_str = if app.is_24h { now.format("%H:%M:%S").to_string() } else { now.format("%I:%M:%S %p").to_string() };
 
-            // Convert string to big block characters
             fn to_big(s: &str) -> Vec<ratatui::text::Line> {
                 let mut lines = vec![String::new(); 5];
                 for c in s.chars() {
@@ -475,44 +375,34 @@ async fn main() -> Result<()> {
                         '7' => ["███", "  █", "  █", "  █", "  █"],
                         '8' => ["███", "█ █", "███", "█ █", "███"],
                         '9' => ["███", "█ █", "███", "  █", "███"],
-                        ':' => ["   ", " ▄ ", "   ", " ▀ ", "   "],
+                        ':' => ["   ", " ▄ ", "   ", " ▄ ", "   "],
                         'A' => [" ██", "█ █", "███", "█ █", "█ █"],
                         'P' => ["██ ", "█ █", "██ ", "█  ", "█  "],
                         'M' => ["█ █", "███", "█ █", "█ █", "█ █"],
                         ' ' => ["   ", "   ", "   ", "   ", "   "],
                         _   => ["   ", "   ", "   ", "   ", "   "],
                     };
-                    for i in 0..5 {
-                        lines[i].push_str(art[i]);
-                        lines[i].push(' ');
-                    }
+                    for i in 0..5 { lines[i].push_str(art[i]); lines[i].push(' '); }
                 }
                 lines.into_iter().map(ratatui::text::Line::from).collect()
             }
 
-            let clock_paragraph = Paragraph::new(to_big(&clock_str))
-                .alignment(Alignment::Center)
-                .style(
-                    Style::default()
-                        .fg(Color::Cyan)
-                        .add_modifier(Modifier::BOLD),
-                )
-                .block(
-                    Block::default()
-                        .borders(Borders::ALL)
-                        .title(if app.is_24h { " Digital Clock (24h) " } else { " Digital Clock (12h) " }),
-                );
-
-            // Center the clock in the right panel
-            let right_v_margin = Layout::default()
-                .direction(Direction::Vertical)
-                .constraints([
-                    Constraint::Fill(1),
-                    Constraint::Length(7), // Increased height for big text
-                    Constraint::Fill(1),
-                ])
-                .split(top_split[1])[1];
+            let clock_paragraph = Paragraph::new(to_big(&clock_str)).alignment(Alignment::Center).style(Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD)).block(Block::default().borders(Borders::ALL).title(if app.is_24h { " Digital Clock (24h) " } else { " Digital Clock (12h) " }));
+            let right_v_margin = Layout::default().direction(Direction::Vertical).constraints([Constraint::Fill(1), Constraint::Length(7), Constraint::Fill(1)]).split(top_split[1])[1];
             f.render_widget(clock_paragraph, right_v_margin);
+
+            if app.state == AppState::Finished {
+                let flash = (Instant::now().elapsed().as_millis() / 500) % 2 == 0;
+                let style = if flash {
+                    Style::default().fg(Color::Black).bg(Color::Yellow).add_modifier(Modifier::BOLD)
+                } else {
+                    Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)
+                };
+                let block = Block::default().title(" Notification ").borders(Borders::ALL).border_style(style);
+                let area = centered_rect(40, 20, f.area());
+                f.render_widget(Clear, area);
+                f.render_widget(Paragraph::new("\nTIME UP!\n\nPress 'r' to Reset").alignment(Alignment::Center).block(block).style(style), area);
+            }
 
             let elapsed_total = app.elapsed.as_secs_f32();
             let eh = (elapsed_total / 3600.0) as u32;
@@ -520,28 +410,15 @@ async fn main() -> Result<()> {
             let es = (elapsed_total % 60.0) as u32;
 
             let mut timer_spans = vec![ratatui::text::Span::raw(" Set: ")];
-            let units = [
-                format!("{:02}h", app.h),
-                format!("{:02}m", app.m),
-                format!("{:02}s", app.s),
-            ];
+            let units = [format!("{:02}h", app.h), format!("{:02}m", app.m), format!("{:02}s", app.s)];
             for (i, unit) in units.iter().enumerate() {
                 let style = if app.state == AppState::Setting && app.selected_unit == i {
-                    Style::default()
-                        .fg(Color::Cyan)
-                        .add_modifier(Modifier::BOLD)
-                } else {
-                    Style::default()
-                };
+                    Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD)
+                } else { Style::default() };
                 timer_spans.push(ratatui::text::Span::styled(unit, style));
-                if i < 2 {
-                    timer_spans.push(ratatui::text::Span::raw(" : "));
-                }
+                if i < 2 { timer_spans.push(ratatui::text::Span::raw(" : ")); }
             }
-            timer_spans.push(ratatui::text::Span::raw(format!(
-                " | Elapsed: {:02}:{:02}:{:02}",
-                eh, em, es
-            )));
+            timer_spans.push(ratatui::text::Span::raw(format!(" | Elapsed: {:02}:{:02}:{:02}", eh, em, es)));
 
             let fallen_count = app.initial_sand.saturating_sub(app.source_sand());
             let timer_display = vec![
@@ -556,136 +433,72 @@ async fn main() -> Result<()> {
                 }).style(Style::default().fg(Color::Yellow)),
             ];
 
-            let stats = Paragraph::new(timer_display)
-                .alignment(Alignment::Center)
-                .block(Block::default().borders(Borders::ALL).title(" Control Panel "));
+            let stats = Paragraph::new(timer_display).alignment(Alignment::Center).block(Block::default().borders(Borders::ALL).title(" Control Panel "));
             f.render_widget(stats, chunks[1]);
         })?;
 
         if event::poll(tick_rate)? {
             if let Event::Key(key) = event::read()? {
                 match key.code {
-                    KeyCode::Char('q') => {
-                        save_config(app.h, app.m, app.s, wall_f, sand_f, app.is_24h)?;
-                        break;
-                    }
-                    KeyCode::Char('r') => {
-                        app = App::new(app.h, app.m, app.s, wall_f, sand_f, app.is_24h)
-                    }
-                    KeyCode::Char('t') => {
-                        app.is_24h = !app.is_24h;
-                        save_config(app.h, app.m, app.s, wall_f, sand_f, app.is_24h)?;
-                    }
+                    KeyCode::Char('q') => { save_config(app.h, app.m, app.s, wall_f, sand_f, app.is_24h); break; },
+                    KeyCode::Char('r') => app = App::new(app.h, app.m, app.s, wall_f, sand_f, app.is_24h),
+                    KeyCode::Char('t') => { app.is_24h = !app.is_24h; save_config(app.h, app.m, app.s, wall_f, sand_f, app.is_24h); },
                     KeyCode::Char(' ') => match app.state {
-                        AppState::Setting | AppState::Paused => {
-                            if app.initial_sand > 0 {
-                                app.state = AppState::Running;
-                                app.last_tick = Instant::now();
-                            }
-                        }
+                        AppState::Setting | AppState::Paused => if app.initial_sand > 0 {
+                            app.state = AppState::Running;
+                            app.last_tick = Instant::now();
+                        },
                         AppState::Running => app.state = AppState::Paused,
                         _ => {}
                     },
-                    KeyCode::Char(']') => {
-                        wall_f = (wall_f + 0.05).min(1.0);
-                        app.wall_friction = wall_f;
-                        save_config(app.h, app.m, app.s, wall_f, sand_f, app.is_24h)?;
-                    }
-                    KeyCode::Char('[') => {
-                        wall_f = (wall_f - 0.05).max(0.0);
-                        app.wall_friction = wall_f;
-                        save_config(app.h, app.m, app.s, wall_f, sand_f, app.is_24h)?;
-                    }
-                    KeyCode::Char('}') => {
-                        sand_f = (sand_f + 0.05).min(1.0);
-                        app.sand_friction = sand_f;
-                        save_config(app.h, app.m, app.s, wall_f, sand_f, app.is_24h)?;
-                    }
-                    KeyCode::Char('{') => {
-                        sand_f = (sand_f - 0.05).max(0.0);
-                        app.sand_friction = sand_f;
-                        save_config(app.h, app.m, app.s, wall_f, sand_f, app.is_24h)?;
-                    }
-                    _ if app.state == AppState::Setting => match key.code {
-                        KeyCode::Left => app.selected_unit = (app.selected_unit + 2) % 3,
-                        KeyCode::Right => app.selected_unit = (app.selected_unit + 1) % 3,
-                        KeyCode::Up => {
-                            match app.selected_unit {
-                                0 => app.h += 1,
-                                1 => {
-                                    if app.m < 59 {
-                                        app.m += 1
-                                    } else {
-                                        app.h += 1;
-                                        app.m = 0
-                                    }
+                    KeyCode::Char(']') => { wall_f = (wall_f + 0.05).min(1.0); app.wall_friction = wall_f; save_config(app.h, app.m, app.s, wall_f, sand_f, app.is_24h); },
+                    KeyCode::Char('[') => { wall_f = (wall_f - 0.05).max(0.0); app.wall_friction = wall_f; save_config(app.h, app.m, app.s, wall_f, sand_f, app.is_24h); },
+                    KeyCode::Char('}') => { sand_f = (sand_f + 0.05).min(1.0); app.sand_friction = sand_f; save_config(app.h, app.m, app.s, wall_f, sand_f, app.is_24h); },
+                    KeyCode::Char('{') => { sand_f = (sand_f - 0.05).max(0.0); app.sand_friction = sand_f; save_config(app.h, app.m, app.s, wall_f, sand_f, app.is_24h); },
+                    _ if app.state == AppState::Setting => {
+                        match key.code {
+                            KeyCode::Left => app.selected_unit = (app.selected_unit + 2) % 3,
+                            KeyCode::Right => app.selected_unit = (app.selected_unit + 1) % 3,
+                            KeyCode::Up => {
+                                match app.selected_unit {
+                                    0 => app.h += 1,
+                                    1 => if app.m < 59 { app.m += 1 } else { app.h += 1; app.m = 0 },
+                                    2 => if app.s < 59 { app.s += 1 } else { app.m += 1; app.s = 0 },
+                                    _ => {}
                                 }
-                                2 => {
-                                    if app.s < 59 {
-                                        app.s += 1
-                                    } else {
-                                        app.m += 1;
-                                        app.s = 0
-                                    }
-                                }
-                                _ => {}
+                                let sel = app.selected_unit;
+                                app = App::new(app.h, app.m, app.s, wall_f, sand_f, app.is_24h);
+                                app.selected_unit = sel;
+                                save_config(app.h, app.m, app.s, wall_f, sand_f, app.is_24h);
                             }
-                            let sel = app.selected_unit;
-                            app = App::new(app.h, app.m, app.s, wall_f, sand_f, app.is_24h);
-                            app.selected_unit = sel;
-                            save_config(app.h, app.m, app.s, wall_f, sand_f, app.is_24h)?;
-                        }
-                        KeyCode::Down => {
-                            match app.selected_unit {
-                                0 => {
-                                    if app.h > 0 {
-                                        app.h -= 1
-                                    }
+                            KeyCode::Down => {
+                                match app.selected_unit {
+                                    0 => if app.h > 0 { app.h -= 1 },
+                                    1 => if app.m > 0 { app.m -= 1 } else if app.h > 0 { app.h -= 1; app.m = 59 },
+                                    2 => if app.s > 0 { app.s -= 1 } else if app.m > 0 { app.m -= 1; app.s = 59 },
+                                    _ => {}
                                 }
-                                1 => {
-                                    if app.m > 0 {
-                                        app.m -= 1
-                                    } else if app.h > 0 {
-                                        app.h -= 1;
-                                        app.m = 59
-                                    }
-                                }
-                                2 => {
-                                    if app.s > 0 {
-                                        app.s -= 1
-                                    } else if app.m > 0 {
-                                        app.m -= 1;
-                                        app.s = 59
-                                    }
-                                }
-                                _ => {}
+                                let sel = app.selected_unit;
+                                app = App::new(app.h, app.m, app.s, wall_f, sand_f, app.is_24h);
+                                app.selected_unit = sel;
+                                save_config(app.h, app.m, app.s, wall_f, sand_f, app.is_24h);
                             }
-                            let sel = app.selected_unit;
-                            app = App::new(app.h, app.m, app.s, wall_f, sand_f, app.is_24h);
-                            app.selected_unit = sel;
-                            save_config(app.h, app.m, app.s, wall_f, sand_f, app.is_24h)?;
-                        }
-                        KeyCode::Char(c) if c.is_ascii_digit() => {
-                            let digit = c.to_digit(10).unwrap();
-                            match app.selected_unit {
-                                0 => app.h = (app.h * 10 + digit) % 100,
-                                1 => {
-                                    let v = app.m * 10 + digit;
-                                    app.m = if v <= 59 { v } else { digit };
+                            KeyCode::Char(c) if c.is_ascii_digit() => {
+                                let digit = c.to_digit(10).unwrap();
+                                match app.selected_unit {
+                                    0 => app.h = (app.h * 10 + digit) % 100,
+                                    1 => { let v = app.m * 10 + digit; app.m = if v <= 59 { v } else { digit }; },
+                                    2 => { let v = app.s * 10 + digit; app.s = if v <= 59 { v } else { digit }; },
+                                    _ => {}
                                 }
-                                2 => {
-                                    let v = app.s * 10 + digit;
-                                    app.s = if v <= 59 { v } else { digit };
-                                }
-                                _ => {}
+                                let sel = app.selected_unit;
+                                app = App::new(app.h, app.m, app.s, wall_f, sand_f, app.is_24h);
+                                app.selected_unit = sel;
+                                save_config(app.h, app.m, app.s, wall_f, sand_f, app.is_24h);
                             }
-                            let sel = app.selected_unit;
-                            app = App::new(app.h, app.m, app.s, wall_f, sand_f, app.is_24h);
-                            app.selected_unit = sel;
-                            save_config(app.h, app.m, app.s, wall_f, sand_f, app.is_24h)?;
+                            _ => {}
                         }
-                        _ => {}
-                    },
+                    }
                     _ => {}
                 }
             }
